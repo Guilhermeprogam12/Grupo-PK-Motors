@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Shineray PK Motors</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root { --red: #ff0000; --gray: #000000; --border: #000000; }
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background: var(--gray); display: flex; flex-direction: column; height: 100vh; }
+        
+        header { background: rgb(0, 0, 0); border-bottom: 3px solid var(--red); padding: 10px 5%; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .logo { height: 45px; }
+
+        .main { display: grid; grid-template-columns: 350px 1fr; gap: 20px; padding: 20px; flex: 1; overflow: hidden; }
+        .card { background: #ff0000; border-radius: 8px; border: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+        .card-header { padding: 15px; background: #ff0000; border-bottom: 1px solid var(--border); font-weight: bold; display: flex; flex-direction: column; gap: 5px; }
+        
+        #contactList { overflow-y: auto; flex: 1; padding: 5px; contain: content; background: #fff; }
+        .contact-item { padding: 10px; border-bottom: 1px solid #ff0000; display: flex; align-items: center; gap: 10px; font-size: 14px; color: #000; }
+        .contact-item:hover { background: #eee; }
+
+        .composer { padding: 20px; display: flex; flex-direction: column; gap: 15px; background: #fff; flex: 1; }
+        input[type="text"], textarea { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-family: inherit; }
+        textarea { height: 150px; resize: none; }
+        
+        .btn { background: var(--red); color: #fff; border: none; padding: 15px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.3s; }
+        .btn:disabled { background: #555; cursor: not-allowed; }
+        .btn:hover:not(:disabled) { background: #000; }
+
+        .vars { display: flex; gap: 8px; margin-bottom: 5px; }
+        .var-btn { background: #000; color: #fff; border: 1px solid #ff0000; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; }
+        .btn-logout { background: #000; color: #fff; border: 1px solid #ff0000; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; }
+
+        #log { color: #ff0000; font-weight: bold; text-align: center; margin-top: 10px; min-height: 20px; }
+        #qrImg { width: 200px; margin: 10px auto; display: none; border: 3px solid #000; }
+    </style>
+</head>
+<body>
+
+<header>
+    <img src="https://upload.wikimedia.org/wikipedia/commons/b/b8/Shineray_logo.png" class="logo">
+    <div style="display: flex; align-items: center; gap: 15px;">
+        <div id="status" style="font-weight: bold; color: #ff0000;">Iniciando Sistema...</div>
+        <button class="btn-logout" onclick="desconectar()">Desconectar</button>
+    </div>
+</header>
+
+<div class="main">
+    <div class="card">
+        <div class="card-header">
+           Agenda de contatos
+            <input type="text" id="search" placeholder=" Filtrar por nome..." style="padding: 8px; border: 1px solid #000;">
+        </div>
+        <div id="contactList">Aguardando Conexão</div>
+    </div>
+    <div class="card">
+        <div class="composer">
+            <img id="qrImg">
+            
+            <div style="background: #ff0000; padding: 15px; border-radius: 8px; border: 1px solid #000000;">
+                <label style="font-weight: bold; color: #000000; font-size: 12px; display: block; margin-bottom: 5px;">NÚMERO MANUAL (DDD + NÚMERO):</label>
+                <input type="text" id="manualNum" placeholder="Ex: 5516999999999">
+            </div>
+
+            <div>
+                <div class="vars">
+                    <button class="var-btn" onclick="addVar('{nome}')"> Inserir {nome}</button>
+                </div>
+                <textarea id="msg" placeholder="Olá {nome}, confira as ofertas da Shineray PK Motors!"></textarea>
+            </div>
+
+            <div style="font-size: 13px; background: #ff0000; padding: 10px; border-radius: 6px; color: #000;">
+                <b>Foto do Produto:</b> <input type="file" id="fileInp" accept="image/*">
+            </div>
+
+            <button class="btn" id="sendBtn" disabled onclick="executarBlast()"> INICIAR DISPARO </button>
+            <div id="log"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+    let mediaData = null;
+    let agendaCompleta = [];
+    let selecionadosGlobal = new Set();
+    let searchTimeout;
+
+    socket.on('qr', url => {
+        const img = document.getElementById('qrImg');
+        img.src = url; img.style.display = 'block';
+        document.getElementById('status').innerText = 'Escaneie o QR Code';
+    });
+
+    socket.on('ready', () => {
+        document.getElementById('qrImg').style.display = 'none';
+        document.getElementById('status').innerText = ' WHATSAPP CONECTADO';
+        document.getElementById('status').style.color = '#00ff00';
+        document.getElementById('sendBtn').disabled = false;
+        carregarAgenda();
+    });
+
+    async function carregarAgenda() {
+        try {
+            const res = await fetch('/contacts');
+            agendaCompleta = await res.json();
+            renderizarContatos(agendaCompleta);
+        } catch (e) {
+            document.getElementById('contactList').innerText = "Erro ao carregar contatos.";
+        }
+    }
+
+    function toggleSelecao(checkbox) {
+        if (checkbox.checked) { selecionadosGlobal.add(checkbox.value); } 
+        else { selecionadosGlobal.delete(checkbox.value); }
+    }
+
+    function renderizarContatos(lista) {
+        const listDiv = document.getElementById('contactList');
+        const html = lista.map(c => `
+            <div class="contact-item">
+                <input type="checkbox" value="${c.id}" data-name="${c.name}" ${selecionadosGlobal.has(c.id) ? 'checked' : ''} onchange="toggleSelecao(this)">
+                <span>${c.name}</span>
+            </div>
+        `).join('');
+        listDiv.innerHTML = html;
+    }
+
+    document.getElementById('search').addEventListener('input', function() {
+        const termo = this.value.toLowerCase();
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            const filtrados = agendaCompleta.filter(c => c.name.toLowerCase().includes(termo));
+            renderizarContatos(filtrados);
+        }, 150);
+    });
+
+    function addVar(v) {
+        const area = document.getElementById('msg');
+        area.value += v; area.focus();
+    }
+
+    async function desconectar() {
+        if(!confirm("Deseja desconectar?")) return;
+        document.getElementById('status').innerText = "Desconectando...";
+        await fetch('/logout', { method: 'POST' });
+        location.reload();
+    }
+
+    document.getElementById('fileInp').onchange = (e) => {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (ev) => mediaData = { data: ev.target.result.split(',')[1], mimetype: file.type, filename: file.name };
+        reader.readAsDataURL(file);
+    };
+
+    async function executarBlast() {
+        const manual = document.getElementById('manualNum').value.trim();
+        const msgBase = document.getElementById('msg').value;
+        const btn = document.getElementById('sendBtn');
+        const logDiv = document.getElementById('log');
+
+        btn.disabled = true;
+
+        const disparar = async (num, texto) => {
+            return fetch('/send', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ number: num, message: texto, media: mediaData })
+            });
+        };
+
+        if (manual !== "") {
+            logDiv.innerText = "Enviando Manual...";
+            await disparar(manual, msgBase.replace('{nome}', 'Cliente'));
+            logDiv.innerText = "✅ Finalizado!";
+        } else {
+            const listaIds = Array.from(selecionadosGlobal);
+            if (listaIds.length === 0) {
+                alert('Selecione os clientes!');
+                btn.disabled = false;
+                return;
+            }
+
+            for (let i = 0; i < listaIds.length; i++) {
+                const id = listaIds[i];
+                const contato = agendaCompleta.find(c => c.id === id);
+                const nome = contato ? contato.name : 'Cliente';
+                
+                logDiv.innerText = `Enviando ${i + 1}/${listaIds.length} para ${nome}...`;
+                await disparar(id, msgBase.replace('{nome}', nome));
+
+                if (i < listaIds.length - 1) {
+                    const delay = Math.floor(Math.random() * (10 - 3 + 1) + 3) * 1000;
+                    logDiv.innerText = `Aguardando ${delay/1000}s...`;
+                    await new Promise(r => setTimeout(r, delay));
+                }
+            }
+            logDiv.innerText = "✅ Disparo Concluído!";
+        }
+        btn.disabled = false;
+    }
+</script>
+</body>
+</html>
